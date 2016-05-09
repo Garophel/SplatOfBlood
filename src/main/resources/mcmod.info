@@ -1,0 +1,16 @@
+[
+{
+  "modid": "splatofblood",
+  "name": "Splat of Blood",
+  "description": "Protects lost items until next death.",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["Garophel"],
+  "credits": "N/A",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]
