@@ -38,8 +38,9 @@ public class PlayerDropsHandler {
 		}
 		
 		if(world.isAirBlock(origin)) {
-			while(!world.getBlockState(origin).getMaterial().blocksMovement()) {
-				origin = origin.down();
+			BlockPos newOrigin = origin.down();
+			while(!world.getBlockState(newOrigin).getMaterial().blocksMovement()) {
+				origin = newOrigin;
 			}
 		} else {
 			if(world.isAirBlock(origin.up())) {

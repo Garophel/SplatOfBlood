@@ -8,7 +8,7 @@ public class ExperienceDropHandler {
 	
 	@SubscribeEvent
 	public void expDrop(LivingExperienceDropEvent e) {
-		if(e.getEntityLiving() instanceof EntityPlayer && e.getEntityLiving().hasCapability(DeathInventoryManager.DEATH_INVENTORY_HANDLER, null)) {
+		if(e.getEntityLiving() instanceof EntityPlayer) {
 			e.setCanceled(true);
 		}
 	}

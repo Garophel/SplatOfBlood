@@ -42,9 +42,9 @@ public class SplatOfBlood {
 	
 	@EventHandler
 	public void init(FMLInitializationEvent e) {
-		DeathInventoryManager.registerCapability();
-
-		MinecraftForge.EVENT_BUS.register(new DeathInventoryManager.DeathInventoryAttacher());
+//		DeathInventoryManager.registerCapability();
+//
+//		MinecraftForge.EVENT_BUS.register(new DeathInventoryManager.DeathInventoryAttacher());
 		MinecraftForge.EVENT_BUS.register(new PlayerDropsHandler());
 		
 		TileEntity.addMapping(TileBloodSplat.class, MODID + "_bloodSplat");
@@ -56,7 +56,10 @@ public class SplatOfBlood {
 			System.out.println("FML Common saves: " + FMLCommonHandler.instance().getSavesDirectory());
 			File fl = new File(((AnvilSaveConverter)e.getServer().getActiveAnvilConverter()).savesDirectory, e.getServer().getFolderName());
 			DeathInventoryManager.instance = new DeathInventoryManager(fl);
+			DeathInventoryManager.instance.init();
 			System.out.println("Directory: " + fl.getAbsolutePath());
+			
+			e.registerServerCommand(new CmdDeathInventory());
 		} catch(Exception er) {
 			System.err.println("Error during serverstarting in splatofblood");
 			er.printStackTrace();

@@ -2,70 +2,33 @@ package garophel.splatofblood;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.sql.Date;
-import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Random;
 import java.util.TimeZone;
 import java.util.UUID;
 
-import net.minecraft.entity.Entity;
 import net.minecraft.entity.item.EntityItem;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.CompressedStreamTools;
-import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
-import net.minecraft.util.EnumFacing;
-import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
-import net.minecraftforge.common.capabilities.Capability;
-import net.minecraftforge.common.capabilities.Capability.IStorage;
-import net.minecraftforge.common.capabilities.CapabilityInject;
-import net.minecraftforge.common.capabilities.CapabilityManager;
-import net.minecraftforge.common.capabilities.ICapabilityProvider;
-import net.minecraftforge.common.util.INBTSerializable;
-import net.minecraftforge.event.AttachCapabilitiesEvent;
-import net.minecraftforge.fml.common.FMLCommonHandler;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 
-import org.apache.logging.log4j.Level;
-
+import com.google.common.base.Function;
 import com.google.common.io.Files;
-import com.sun.corba.se.spi.extension.ZeroPortPolicy;
 
 public class DeathInventoryManager {
-	
-	@CapabilityInject(IPlayerDeathInventory.class)
-	public static Capability<IPlayerDeathInventory> DEATH_INVENTORY_HANDLER;
-	
-	public static ResourceLocation deathInventoryCapKey = new ResourceLocation(SplatOfBlood.MODID, "di");
-	
-	public static void registerCapability() {
-		CapabilityManager.INSTANCE.register(IPlayerDeathInventory.class, new IStorage<IPlayerDeathInventory>() {
-			
-			@Override
-			public NBTBase writeNBT(Capability<IPlayerDeathInventory> capability, IPlayerDeathInventory instance, EnumFacing side) {
-				return null;
-			}
-			
-			@Override
-			public void readNBT(Capability<IPlayerDeathInventory> capability, IPlayerDeathInventory instance, EnumFacing side, NBTBase nbt) {}
-			
-		}, PlayerDeathInventory.class);
-	}
 	
 	private static UUID uuidZero = new UUID(0l, 0l);
 	public static DeathInventoryManager instance = null;
@@ -76,8 +39,10 @@ public class DeathInventoryManager {
 	private static Calendar utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
 	private static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss");
 	
+	private static final String deathInventoriesDirectory = "DeathInventories";
+	
 	public DeathInventoryManager(File worldDir) {
-		data = new DeathInventories(worldDir, "DeathInventories");
+		data = new DeathInventories(new File(worldDir, deathInventoriesDirectory), "DeathInventories");
 	}
 	
 	/** Called when a player right-clicks a blood splat.
@@ -104,10 +69,6 @@ public class DeathInventoryManager {
 				}
 			}
 			
-//			for(ItemStack is : deathInventory.items) {
-//				
-//			}
-			
 			if(deathInventory.experience > 0) {
 				plr.addExperience(deathInventory.experience);
 				deathInventory.experience = 0;
@@ -121,9 +82,19 @@ public class DeathInventoryManager {
 				deathInventory.setCacheInvalid();
 				data.save();
 			}
+		} else {
+			SplatOfBlood.log.warn("No such blood splat: " + deathInventoryId + ", " + getDeathTimeFormatted(deathInventoryId));
 		}
 		
 		return false;
+	}
+	
+	public void deleteAllDeathInventories() {
+		data.clearAll();
+	}
+	
+	public List<String> getDeathInventoryStrings(String filter, int type, Function<DeathInventoryEntry, String> func, boolean endMarker) {
+		return data.getDeathInventoryStrings(filter, type, func, endMarker);
 	}
 	
 	/** Used to determine whether it's ok to allow any player to
@@ -144,24 +115,9 @@ public class DeathInventoryManager {
 	}
 	
 	public UUID storeDeathInventory(EntityPlayer plr, List<EntityItem> deathItems) {
-		UUID oldDeathInventoryId = null;
-		IPlayerDeathInventory pdi = plr.getCapability(DEATH_INVENTORY_HANDLER, null);
-		if(pdi != null) {
-			UUID deathInventoryId = createDeathInventoryId();
-			oldDeathInventoryId = pdi.getDeathInventoryId();
-
-			if(oldDeathInventoryId != null) {
-				data.deleteDeathInventory(oldDeathInventoryId, false);
-			}
-			
-			data.storeDeathInventory(deathInventoryId, plr, deathItems);
-			pdi.setDeathInventoryId(deathInventoryId);
-			
-			return deathInventoryId;
-		}
-		
-		SplatOfBlood.log.error("Death inventory capability not found on player: " + plr.getDisplayName() + "(" + plr.getName() + " / " + plr.getUniqueID() + ")");
-		return null;
+		UUID deathInventoryId = createDeathInventoryId();
+		data.storeDeathInventory(deathInventoryId, plr, deathItems);
+		return deathInventoryId;
 	}
 	
 	public UUID createDeathInventoryId() {
@@ -181,15 +137,20 @@ public class DeathInventoryManager {
 	}
 	
 	public DeathInventoryManager init() {
-		
+		data.init();
 		return this;
 	}
 	
 	public static class DeathInventories {
-		private Map<UUID, DeathInventory> validDeathInventories = new HashMap<UUID, DeathInventory>();
-		private final File mainFile, backupFile, mainFileOld, backupFileOld;
+		private Map<UUID, DeathInventoryEntry> invIdToEntryMap = new HashMap<UUID, DeathInventoryEntry>();
+		private Map<UUID, DeathInventoryEntry> playerIdToEntryMap = new HashMap<UUID, DeathInventoryEntry>();
+		private Map<String, DeathInventoryEntry> playerNameToEntryMap = new HashMap<String, DeathInventoryEntry>();
+		
+		private final File dir, mainFile, backupFile, mainFileOld, backupFileOld;
 		
 		public DeathInventories(File dir, String filename) {
+			this.dir = dir;
+			
 			mainFile = new File(dir, filename + ".dat");
 			backupFile = new File(dir, filename + ".backup.dat");
 			
@@ -198,39 +159,119 @@ public class DeathInventoryManager {
 		}
 		
 		public void init() {
-			try {
-				if(mainFile.exists()) {
-					if(mainFile.isFile()) {
-						
-					} else {
-						SplatOfBlood.log.error("Directory at " + mainFile.getAbsolutePath() + " is blocking a required data file!");
-					}
-				}
-			} catch(Exception e) {
-				SplatOfBlood.log.catching(e);
+			if(!dir.isDirectory()) {
+				dir.mkdir();
+			}
+			
+			if(mainFile.isFile() || backupFile.isFile()) {
+				load();
 			}
 		}
 		
+		public void clearAll() {
+			invIdToEntryMap.clear();
+			save();
+		}
+		
+		private DeathInventory removeDeathInventory(DeathInventoryEntry entry, boolean forceSave) {
+			if(entry == null) return null;
+			
+			invIdToEntryMap.remove(entry.getDeathInventoryId());
+			playerIdToEntryMap.remove(entry.getPlayerUUID());
+			playerNameToEntryMap.remove(entry.getPlayerName());
+			
+			if(forceSave) save();
+			
+			return entry.getDeathInventory();
+		}
+		
+		private void addDeathInventory(DeathInventoryEntry entry, boolean forceSave) {
+			if(entry == null) return;
+			
+			invIdToEntryMap.put(entry.getDeathInventoryId(), entry);
+			playerIdToEntryMap.put(entry.getPlayerUUID(), entry);
+			playerNameToEntryMap.put(entry.getPlayerName(), entry);
+			
+			if(forceSave) save();
+		}
+		
+		/** @param type: 0 = inv id, 1 = player id, 2 = player name */
+		public List<String> getDeathInventoryStrings(String filter, int type, Function<DeathInventoryEntry, String> func, boolean endMarker) {
+			boolean doFilter = filter != null && !filter.isEmpty();
+			List<String> ret = new LinkedList<String>();
+			switch(type) {
+			case 0:
+				for(Entry<UUID, DeathInventoryEntry> e : invIdToEntryMap.entrySet()) {
+					if(doFilter) {
+						if(e.getKey().toString().startsWith(filter)) ret.add(func.apply(e.getValue()));
+					} else {
+						ret.add(func.apply(e.getValue()));
+					}
+				}
+				
+				break;
+			case 1:
+				for(Entry<UUID, DeathInventoryEntry> e : playerIdToEntryMap.entrySet()) {
+					if(doFilter) {
+						if(e.getKey().toString().startsWith(filter)) ret.add(func.apply(e.getValue()));
+					} else {
+						ret.add(func.apply(e.getValue()));
+					}
+				}
+				
+				break;
+			case 2:
+				for(Entry<String, DeathInventoryEntry> e : playerNameToEntryMap.entrySet()) {
+					if(doFilter) {
+						if(e.getKey().startsWith(filter)) ret.add(func.apply(e.getValue()));
+					} else {
+						ret.add(func.apply(e.getValue()));
+					}
+				}
+				
+				break;
+			}
+			
+			if(endMarker && ret.isEmpty()) {
+				ret.add("[No death inventories]");
+			}
+			
+			return ret;
+		}
+		
 		public boolean isDeathInventoryValid(UUID deathInventoryId) {
-			return validDeathInventories.containsKey(deathInventoryId);
+			return invIdToEntryMap.containsKey(deathInventoryId);
 		}
 		
 		public DeathInventory deleteDeathInventory(UUID deathInventoryId, boolean forceSave) {
-			DeathInventory ret = validDeathInventories.remove(deathInventoryId);
+			DeathInventory ret = removeDeathInventory(invIdToEntryMap.get(deathInventoryId), false);
+//			SplatOfBlood.log.info("deleteDeathInv.ret: " + ret);
 			if(forceSave) save();
 			return ret;
 		}
 		
 		public DeathInventory getDeathInventoryForPlayer(UUID deathInventoryId, EntityPlayer plr) {
-			DeathInventory deathInventory = validDeathInventories.get(deathInventoryId);
-			return deathInventory == null ? null : deathInventory.isOwner(plr) ? deathInventory : null;
+			DeathInventoryEntry deathInventory = invIdToEntryMap.get(deathInventoryId);
+//			SplatOfBlood.log.info("DI: " + deathInventory);
+			return deathInventory == null ? null : deathInventory.isOwner(plr) ? deathInventory.getDeathInventory() : null;
+		}
+		
+		private DeathInventoryEntry getOldDeathInventory(EntityPlayer plr) {
+			DeathInventoryEntry old = playerIdToEntryMap.get(plr.getUniqueID());
+			if(old != null) return old;
+			
+			old = playerNameToEntryMap.get(plr.getName());
+			return old;
 		}
 		
 		public void storeDeathInventory(UUID deathInventoryId, EntityPlayer plr, List<EntityItem> drops) {
 			DeathInventory deathInventory = DeathInventory.fromDrops(plr, drops);
+			SplatOfBlood.log.info("CREATE death inventory: " + deathInventoryId + " = " + deathInventory);
 			
-			validDeathInventories.put(deathInventoryId, deathInventory);
-			save();
+			DeathInventoryEntry old = getOldDeathInventory(plr);
+			removeDeathInventory(old, false);
+			
+			addDeathInventory(new DeathInventoryEntry(plr.getUniqueID(), plr.getName(), deathInventoryId, deathInventory), true);
 		}
 		
 		private static boolean tryWriteFile(File file, NBTTagCompound data) {
@@ -270,21 +311,29 @@ public class DeathInventoryManager {
 			NBTTagList deathInventories = nbt.getTagList("list", 10);
 			final int len = deathInventories.tagCount();
 			for(int i = 0; i < len; i++) {
-				NBTTagCompound pair = deathInventories.getCompoundTagAt(i);
+				NBTTagCompound entry = deathInventories.getCompoundTagAt(i);
 				
-				UUID deathInventoryId = pair.getUniqueId("id");
-				NBTTagCompound deathInventory = pair.getCompoundTag("data");
-				
-				if(!deathInventoryId.equals(uuidZero)) {
-					DeathInventory di = DeathInventory.fromNBT(deathInventory);
-					if(di != null) {
-						validDeathInventories.put(deathInventoryId, di);
-					} else {
-						SplatOfBlood.log.error("Found an invalid death inventory (deserialization failed)!");
-					}
+				DeathInventoryEntry dientry = DeathInventoryEntry.fromNBT(entry);
+				if(dientry == null) {
+					SplatOfBlood.log.error("Found an invalid death inventory.");
 				} else {
-					SplatOfBlood.log.error("Found an invalid death inventory (zero id)!");
+					addDeathInventory(dientry, false);
 				}
+				
+//				UUID deathInventoryId = pair.getUniqueId("id");
+//				NBTTagCompound deathInventory = pair.getCompoundTag("data");
+//				
+//				if(!deathInventoryId.equals(uuidZero)) {
+//					DeathInventory di = DeathInventory.fromNBT(deathInventory);
+//					if(di != null) {
+//						SplatOfBlood.log.info("LOAD death inventory: " + deathInventoryId + " = " + di);
+//						invIdToEntryMap.put(deathInventoryId, di);
+//					} else {
+//						SplatOfBlood.log.error("Found an invalid death inventory (deserialization failed)!");
+//					}
+//				} else {
+//					SplatOfBlood.log.error("Found an invalid death inventory (zero id)!");
+//				}
 			}
 			
 			return true;
@@ -298,18 +347,23 @@ public class DeathInventoryManager {
 			NBTTagList deathInventories = new NBTTagList();
 			nbt.setTag("list", deathInventories);
 			
-			for(Entry<UUID, DeathInventory> ent : validDeathInventories.entrySet()) {
-				NBTTagCompound pair = new NBTTagCompound();
-				pair.setUniqueId("id", ent.getKey());
-				pair.setTag("data", ent.getValue().toNBT());
+			for(Entry<UUID, DeathInventoryEntry> ent : invIdToEntryMap.entrySet()) {
+//				NBTTagCompound pair = new NBTTagCompound();
+//				pair.setUniqueId("id", ent.getKey());
+//				pair.setTag("data", ent.getValue().toNBT());
+//				
+				deathInventories.appendTag(ent.getValue().toNBT());
+				SplatOfBlood.log.info("SAVE death inventory: " + ent.getKey() + " = " + ent.getValue());
 			}
 			
-			try {
-				Files.move(mainFile, mainFileOld);
-			} catch(Exception e) {
-				SplatOfBlood.log.error("Error while moving main data file into an old file. Trying File.renameTo..");
-				SplatOfBlood.log.catching(e);
-				if(!mainFile.renameTo(mainFileOld)) SplatOfBlood.log.error("File.renameTo for main file failed aswell..");
+			if(mainFile.isFile()) {
+				try {
+					Files.move(mainFile, mainFileOld);
+				} catch(Exception e) {
+					SplatOfBlood.log.error("Error while moving main data file into an old file. Trying File.renameTo..");
+					SplatOfBlood.log.catching(e);
+					if(!mainFile.renameTo(mainFileOld)) SplatOfBlood.log.error("File.renameTo for main file failed aswell..");
+				}
 			}
 			
 			if(!tryWriteFile(mainFile, nbt)) {
@@ -317,12 +371,14 @@ public class DeathInventoryManager {
 				SplatOfBlood.log.error("Error while writing main file.");
 			}
 			
-			try {
-				Files.move(backupFile, backupFileOld);
-			} catch(Exception e) {
-				SplatOfBlood.log.error("Error while moving backup file into an old file. Trying File.renameTo..");
-				SplatOfBlood.log.catching(e);
-				if(!backupFile.renameTo(backupFileOld)) SplatOfBlood.log.error("File.renameTo for backup file failed aswell..");
+			if(backupFile.isFile()) {
+				try {
+					Files.move(backupFile, backupFileOld);
+				} catch(Exception e) {
+					SplatOfBlood.log.error("Error while moving backup file into an old file. Trying File.renameTo..");
+					SplatOfBlood.log.catching(e);
+					if(!backupFile.renameTo(backupFileOld)) SplatOfBlood.log.error("File.renameTo for backup file failed aswell..");
+				}
 			}
 			
 			if(!tryWriteFile(backupFile, nbt)) {
@@ -334,6 +390,84 @@ public class DeathInventoryManager {
 		}
 	}
 	
+	public static class DeathInventoryEntry {
+		private UUID playerUUID;
+		private String playerName;
+		private UUID deathInventoryId;
+		private DeathInventory deathInventory;
+		
+		private NBTTagCompound cached = null;
+		
+		public DeathInventoryEntry(UUID playerUUID, String playerName, UUID deathInventoryId, DeathInventory deathInventory) {
+			this.playerUUID = playerUUID;
+			this.playerName = playerName;
+			this.deathInventoryId = deathInventoryId;
+			this.deathInventory = deathInventory;
+		}
+		
+		public boolean isOwner(EntityPlayer plr) {
+			return plr.getUniqueID().equals(playerUUID) || plr.getName().equals(playerName);
+		}
+		
+		private DeathInventoryEntry setCached(NBTTagCompound nbt) {
+			cached = nbt;
+			return this;
+		}
+		
+		public UUID getPlayerUUID() {
+			return playerUUID;
+		}
+		
+		public String getPlayerName() {
+			return playerName;
+		}
+		
+		public UUID getDeathInventoryId() {
+			return deathInventoryId;
+		}
+		
+		public DeathInventory getDeathInventory() {
+			return deathInventory;
+		}
+		
+		public void invalidateCache() {
+			cached = null;
+		}
+		
+		public NBTTagCompound toNBT() {
+			if(cached != null) return cached;
+			
+			NBTTagCompound nbt = new NBTTagCompound();
+			nbt.setUniqueId("playerUUID", playerUUID);
+			nbt.setString("playerName", playerName);
+			nbt.setUniqueId("id", deathInventoryId);
+			nbt.setTag("di", deathInventory.toNBT());
+			
+			return cached = nbt;
+		}
+		
+		public static DeathInventoryEntry fromNBT(NBTTagCompound nbt) {
+			UUID playerUUID = nbt.getUniqueId("playerUUID");
+			if(uuidZero.equals(playerUUID)) return null;
+			
+			String playerName = nbt.getString("playerName");
+			if(playerName.isEmpty()) return null;
+			
+			UUID deathInventoryId = nbt.getUniqueId("id");
+			if(uuidZero.equals(playerUUID)) return null;
+			
+			DeathInventory deathInventory = DeathInventory.fromNBT(nbt.getCompoundTag("di"));
+			if(deathInventory == null) return null;
+			
+			return new DeathInventoryEntry(playerUUID, playerName, deathInventoryId, deathInventory).setCached(nbt);
+		}
+		
+		@Override
+		public String toString() {
+			return deathInventory.toString();
+		}
+	}
+	
 	public static class DeathInventory {
 		private final UUID playerUUID;
 		private final String playerName;
@@ -341,7 +475,6 @@ public class DeathInventoryManager {
 		private List<ItemStack> items;
 		private int experience = 0;
 		
-		private boolean cacheValid = true;
 		private NBTTagCompound cached = null;
 		
 		public DeathInventory(EntityPlayer plr, List<ItemStack> items) {
@@ -366,7 +499,6 @@ public class DeathInventoryManager {
 		}
 		
 		public DeathInventory setCacheInvalid() {
-			this.cacheValid = false;
 			this.cached = null;
 			return this;
 		}
@@ -376,7 +508,7 @@ public class DeathInventoryManager {
 		}
 		
 		public NBTTagCompound toNBT() {
-			if(cacheValid) return cached;
+			if(cached != null) return cached;
 			NBTTagCompound nbt = new NBTTagCompound();
 			
 			nbt.setUniqueId("playerUUID", playerUUID);
@@ -385,12 +517,17 @@ public class DeathInventoryManager {
 			NBTTagList items = new NBTTagList();
 			nbt.setTag("items", items);
 			for(ItemStack is : this.items) {
-				items.appendTag(is.serializeNBT());
+				NBTTagCompound itemNBT = is.serializeNBT();
+				if(itemNBT == null) {
+					SplatOfBlood.log.warn("Null item nbt: " + itemNBT);
+				} else {
+					items.appendTag(itemNBT);
+				}
 			}
 			
 			nbt.setInteger("experience", experience);
 			
-			return nbt;
+			return cached = nbt;
 		}
 		
 		public static DeathInventory fromNBT(NBTTagCompound nbt) {
@@ -422,63 +559,10 @@ public class DeathInventoryManager {
 			
 			return new DeathInventory(plr, items);
 		}
-	}
-	
-	public static interface IPlayerDeathInventory {
-		public UUID getDeathInventoryId();
-		
-		public void setDeathInventoryId(UUID deathInventoryId);
-	}
-	
-	public static class PlayerDeathInventory implements IPlayerDeathInventory, ICapabilityProvider, INBTSerializable<NBTTagCompound> {
-		
-		private UUID deathInventoryId = uuidZero;
 		
 		@Override
-		public UUID getDeathInventoryId() {
-			return deathInventoryId;
-		}
-		
-		@Override
-		public void setDeathInventoryId(UUID deathInventoryId) {
-			this.deathInventoryId = deathInventoryId;
-		}
-
-		@Override
-		public NBTTagCompound serializeNBT() {
-			NBTTagCompound nbt = new NBTTagCompound();
-			nbt.setUniqueId("deathInvId", deathInventoryId);
-			return nbt;
-		}
-
-		@Override
-		public void deserializeNBT(NBTTagCompound nbt) {
-			deathInventoryId = nbt.getUniqueId("deathInvId");
-		}
-
-		@Override
-		public boolean hasCapability(Capability<?> capability, EnumFacing facing) {
-			return capability == DEATH_INVENTORY_HANDLER;
-		}
-
-		@Override
-		public <T> T getCapability(Capability<T> capability, EnumFacing facing) {
-			if(capability == DEATH_INVENTORY_HANDLER) {
-				return DEATH_INVENTORY_HANDLER.cast(this);
-			}
-			
-			return null;
-		}
-	}
-	
-	public static class DeathInventoryAttacher {
-		
-		@SubscribeEvent
-		public void attach(AttachCapabilitiesEvent.Entity e) {
-			Entity ent = e.getEntity();
-			if(!ent.worldObj.isRemote && ent instanceof EntityPlayer) {
-				e.addCapability(deathInventoryCapKey, new PlayerDeathInventory());
-			}
+		public String toString() {
+			return "Owner name: " + playerName + ", owner UUID: " + playerUUID + ", stacks: " + (items == null ? "NULL" : items.size()) + ", exp: " + experience; 
 		}
 	}
 }
